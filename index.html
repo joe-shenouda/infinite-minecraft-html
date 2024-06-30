@@ -1,0 +1,403 @@
+<html><head><base href="https://websim.ai/" /><title>Infinite Minecraft-like World - WebSim</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
+<style>
+  body { margin: 0; overflow: hidden; }
+  #info {
+    position: absolute;
+    top: 10px;
+    width: 100%;
+    text-align: center;
+    color: white;
+    font-family: Arial, sans-serif;
+    pointer-events: none;
+  }
+  #crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    border: 2px solid white;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="info">Infinite Minecraft-like World<br>WASD to move, Space/Shift to go up/down, Click to place/remove blocks<br>Left click: Place grass, Right click: Remove block</div>
+<div id="crosshair"></div>
+<script>
+let scene, camera, renderer, controls;
+let raycaster;
+let world = {};
+let chunkSize = 16;
+let chunkHeight = 256; // Increased chunk height
+let blockSize = 1;
+let textureLoader, blockTextures;
+let generatedChunks = new Set();
+let chunks = {};
+let renderDistance = 4;
+
+const simplex = new SimplexNoise();
+
+const atlasSize = 256;
+const tileSize = 16;
+const tilesPerRow = atlasSize / tileSize;
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(5, 50, 5); // Increased initial height
+
+  renderer = new THREE.WebGLRenderer({ antialias: false });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  document.body.appendChild(renderer.domElement);
+
+  textureLoader = new THREE.TextureLoader();
+  blockTextures = textureLoader.load('https://minecraft.wiki/images/Rd-161348_terrain.png', function(texture) {
+    texture.magFilter = THREE.NearestFilter;
+    texture.minFilter = THREE.NearestFilter;
+    generateInitialChunks();
+  });
+
+  raycaster = new THREE.Raycaster();
+
+  setupLights();
+  setupControls();
+
+  window.addEventListener('resize', onWindowResize, false);
+  document.addEventListener('mousedown', onDocumentMouseDown, false);
+  document.addEventListener('keydown', onKeyDown, false);
+  document.addEventListener('keyup', onKeyUp, false);
+}
+
+function setupLights() {
+  const ambientLight = new THREE.AmbientLight(0xcccccc, 0.4);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(1, 1, 0.5).normalize();
+  scene.add(directionalLight);
+}
+
+function setupControls() {
+  controls = new THREE.PointerLockControls(camera, document.body);
+  
+  document.addEventListener('click', () => {
+    controls.lock();
+  });
+
+  scene.add(controls.getObject());
+}
+
+function generateInitialChunks() {
+  const playerChunkX = Math.floor(camera.position.x / (chunkSize * blockSize));
+  const playerChunkZ = Math.floor(camera.position.z / (chunkSize * blockSize));
+
+  for (let x = -renderDistance; x <= renderDistance; x++) {
+    for (let z = -renderDistance; z <= renderDistance; z++) {
+      generateChunk(playerChunkX + x, playerChunkZ + z);
+    }
+  }
+}
+
+function generateChunk(chunkX, chunkZ) {
+  const chunkKey = `${chunkX},${chunkZ}`;
+  if (generatedChunks.has(chunkKey)) return;
+
+  let positions = [];
+  let normals = [];
+  let uvs = [];
+
+  for (let x = 0; x < chunkSize; x++) {
+    for (let z = 0; z < chunkSize; z++) {
+      let worldX = chunkX * chunkSize + x;
+      let worldZ = chunkZ * chunkSize + z;
+      let height = Math.floor(getNoiseHeight(worldX, worldZ));
+      
+      for (let y = 0; y <= height && y < chunkHeight; y++) {
+        let type = y === height ? 'grass' : (y > height - 4 ? 'dirt' : 'stone');
+        if (!world[`${worldX},${y},${worldZ}`]) {
+          world[`${worldX},${y},${worldZ}`] = type;
+        }
+      }
+    }
+  }
+
+  updateChunkGeometry(chunkX, chunkZ, positions, normals, uvs);
+
+  const chunkGeometry = new THREE.BufferGeometry();
+  chunkGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  chunkGeometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  chunkGeometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+
+  const chunkMesh = new THREE.Mesh(chunkGeometry, new THREE.MeshLambertMaterial({ map: blockTextures, vertexColors: false }));
+  chunkMesh.position.set(chunkX * chunkSize * blockSize, 0, chunkZ * chunkSize * blockSize);
+  scene.add(chunkMesh);
+
+  chunks[chunkKey] = chunkMesh;
+  generatedChunks.add(chunkKey);
+}
+
+function getNoiseHeight(x, z) {
+  const scale = 0.005;
+  const octaves = 6;
+  const persistence = 0.5;
+  const lacunarity = 2.0;
+  const exponentiation = 4; // Adjust this to make terrain more dramatic
+
+  let amplitude = 1.0;
+  let frequency = 1.0;
+  let noiseHeight = 0;
+
+  for (let i = 0; i < octaves; i++) {
+    const sampleX = x * scale * frequency;
+    const sampleZ = z * scale * frequency;
+    
+    const perlinValue = simplex.noise2D(sampleX, sampleZ);
+    noiseHeight += perlinValue * amplitude;
+
+    amplitude *= persistence;
+    frequency *= lacunarity;
+  }
+
+  // Normalize and apply exponentiation
+  noiseHeight = (noiseHeight + 1) * 0.5;
+  noiseHeight = Math.pow(noiseHeight, exponentiation);
+
+  return Math.floor(noiseHeight * (chunkHeight - 1)); // Scale to 0-(chunkHeight-1) range
+}
+
+function updateChunkGeometry(chunkX, chunkZ, positions, normals, uvs) {
+  for (let x = 0; x < chunkSize; x++) {
+    for (let z = 0; z < chunkSize; z++) {
+      for (let y = 0; y < chunkHeight; y++) {
+        let worldX = chunkX * chunkSize + x;
+        let worldY = y;
+        let worldZ = chunkZ * chunkSize + z;
+        let blockType = world[`${worldX},${worldY},${worldZ}`];
+        if (blockType) {
+          addBlockToChunk(x, y, z, blockType, worldX, worldY, worldZ, positions, normals, uvs);
+        }
+      }
+    }
+  }
+}
+
+function addBlockToChunk(x, y, z, type, worldX, worldY, worldZ, positions, normals, uvs) {
+  const topUVs = type === 'grass' ? getUVs(0, 0) : (type === 'dirt' ? getUVs(2, 0) : getUVs(1, 0));
+  const sideUVs = type === 'grass' ? getUVs(3, 0) : (type === 'dirt' ? getUVs(2, 0) : getUVs(1, 0));
+  const bottomUVs = type === 'grass' ? getUVs(2, 0) : (type === 'dirt' ? getUVs(2, 0) : getUVs(1, 0));
+
+  // Top face
+  if (!world[`${worldX},${worldY+1},${worldZ}`]) {
+    addFace(x, y+1, z, x, y+1, z+1, x+1, y+1, z+1, x+1, y+1, z, 0, 1, 0, topUVs, positions, normals, uvs);
+  }
+  // Bottom face
+  if (!world[`${worldX},${worldY-1},${worldZ}`]) {
+    addFace(x, y, z+1, x, y, z, x+1, y, z, x+1, y, z+1, 0, -1, 0, bottomUVs, positions, normals, uvs);
+  }
+  // Front face
+  if (!world[`${worldX},${worldY},${worldZ+1}`]) {
+    addFace(x+1, y+1, z+1, x, y+1, z+1, x, y, z+1, x+1, y, z+1, 0, 0, 1, sideUVs, positions, normals, uvs);
+  }
+  // Back face
+  if (!world[`${worldX},${worldY},${worldZ-1}`]) {
+    addFace(x, y+1, z, x+1, y+1, z, x+1, y, z, x, y, z, 0, 0, -1, sideUVs, positions, normals, uvs);
+  }
+  // Right face
+  if (!world[`${worldX+1},${worldY},${worldZ}`]) {
+    addFace(x+1, y+1, z, x+1, y+1, z+1, x+1, y, z+1, x+1, y, z, 1, 0, 0, sideUVs, positions, normals, uvs);
+  }
+  // Left face
+  if (!world[`${worldX-1},${worldY},${worldZ}`]) {
+    addFace(x, y+1, z+1, x, y+1, z, x, y, z, x, y, z+1, -1, 0, 0, sideUVs, positions, normals, uvs);
+  }
+}
+
+function addFace(x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, nx, ny, nz, uv, positions, normals, uvs) {
+  positions.push(
+    x1, y1, z1, x2, y2, z2, x3, y3, z3,
+    x1, y1, z1, x3, y3, z3, x4, y4, z4
+  );
+  for (let i = 0; i < 6; i++) {
+    normals.push(nx, ny, nz);
+  }
+  uvs.push(
+    uv[0].x, uv[0].y, uv[1].x, uv[1].y, uv[2].x, uv[2].y,
+    uv[0].x, uv[0].y, uv[2].x, uv[2].y, uv[3].x, uv[3].y
+  );
+}
+
+function getUVs(tileX, tileY) {
+  const u = tileX / tilesPerRow;
+  const v = 1 - (tileY + 1) / tilesPerRow;
+  const tileUVSize = 1 / tilesPerRow;
+  return [
+    new THREE.Vector2(u, v + tileUVSize),
+    new THREE.Vector2(u + tileUVSize, v + tileUVSize),
+    new THREE.Vector2(u + tileUVSize, v),
+    new THREE.Vector2(u, v)
+  ];
+}
+
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+
+function onDocumentMouseDown(event) {
+  if (!controls.isLocked) return;
+
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+
+  const intersects = raycaster.intersectObjects(Object.values(chunks));
+
+  if (intersects.length > 0) {
+    const intersect = intersects[0];
+    const voxelPosition = new THREE.Vector3()
+      .addVectors(intersect.point, intersect.face.normal.multiplyScalar(event.button === 0 ? 0.5 : -0.5))
+      .floor();
+
+    const worldX = Math.floor(voxelPosition.x);
+    const worldY = Math.floor(voxelPosition.y);
+    const worldZ = Math.floor(voxelPosition.z);
+
+    if (event.button === 0) { // Left click: place grass block
+      placeBlock(worldX, worldY, worldZ, 'grass');
+    } else if (event.button === 2) { // Right click: remove block
+      removeBlock(worldX, worldY, worldZ);
+    }
+  }
+}
+
+function placeBlock(x, y, z, type) {
+  const key = `${x},${y},${z}`;
+  if (world[key]) return; // Block already exists
+
+  world[key] = type;
+  updateChunksAroundBlock(x, y, z);
+}
+
+function removeBlock(x, y, z) {
+  const key = `${x},${y},${z}`;
+  if (!world[key]) return; // No block to remove
+
+  delete world[key];
+  updateChunksAroundBlock(x, y, z);
+}
+
+function updateChunksAroundBlock(x, y, z) {
+  const chunkX = Math.floor(x / chunkSize);
+  const chunkZ = Math.floor(z / chunkSize);
+
+  const chunksToUpdate = [
+    [chunkX, chunkZ],
+    [chunkX - 1, chunkZ],
+    [chunkX + 1, chunkZ],
+    [chunkX, chunkZ - 1],
+    [chunkX, chunkZ + 1]
+  ];
+
+  chunksToUpdate.forEach(([cx, cz]) => {
+    updateChunk(cx, cz);
+  });
+}
+
+function updateChunk(chunkX, chunkZ) {
+  const chunkKey = `${chunkX},${chunkZ}`;
+  if (chunks[chunkKey]) {
+    scene.remove(chunks[chunkKey]);
+    chunks[chunkKey].geometry.dispose();
+    delete chunks[chunkKey];
+    generatedChunks.delete(chunkKey);
+  }
+  
+  generateChunk(chunkX, chunkZ);
+}
+
+const moveSpeed = 0.2; // Increased move speed
+const moveState = { forward: false, backward: false, left: false, right: false, up: false, down: false };
+
+function onKeyDown(event) {
+  switch (event.code) {
+    case 'KeyW': moveState.forward = true; break;
+    case 'KeyS': moveState.backward = true; break;
+    case 'KeyA': moveState.left = true; break;
+    case 'KeyD': moveState.right = true; break;
+    case 'Space': moveState.up = true; break;
+    case 'ShiftLeft': moveState.down = true; break;
+  }
+}
+
+function onKeyUp(event) {
+  switch (event.code) {
+    case 'KeyW': moveState.forward = false; break;
+    case 'KeyS': moveState.backward = false; break;
+    case 'KeyA': moveState.left = false; break;
+    case 'KeyD': moveState.right = false; break;
+    case 'Space': moveState.up = false; break;
+    case 'ShiftLeft': moveState.down = false; break;
+  }
+}
+
+function updatePosition() {
+  const moveVector = new THREE.Vector3();
+  if (moveState.forward) moveVector.z -= 1;
+  if (moveState.backward) moveVector.z += 1;
+  if (moveState.left) moveVector.x -= 1;
+  if (moveState.right) moveVector.x += 1;
+  if (moveState.up) moveVector.y += 1;
+  if (moveState.down) moveVector.y -= 1;
+
+  moveVector.normalize().multiplyScalar(moveSpeed);
+  controls.moveRight(moveVector.x);
+  controls.moveForward(-moveVector.z);
+  camera.position.y += moveVector.y;
+
+  checkAndGenerateChunks();
+}
+
+function checkAndGenerateChunks() {
+  const playerChunkX = Math.floor(camera.position.x / (chunkSize * blockSize));
+  const playerChunkZ = Math.floor(camera.position.z / (chunkSize * blockSize));
+
+  for (let x = -renderDistance; x <= renderDistance; x++) {
+    for (let z = -renderDistance; z <= renderDistance; z++) {
+      const chunkX = playerChunkX + x;
+      const chunkZ = playerChunkZ + z;
+      const chunkKey = `${chunkX},${chunkZ}`;
+
+      if (!generatedChunks.has(chunkKey)) {
+        generateChunk(chunkX, chunkZ);
+      }
+    }
+  }
+
+  // Remove chunks that are too far away
+  for (const chunkKey of generatedChunks) {
+    const [cx, cz] = chunkKey.split(',').map(Number);
+    if (Math.abs(cx - playerChunkX) > renderDistance || Math.abs(cz - playerChunkZ) > renderDistance) {
+      scene.remove(chunks[chunkKey]);
+      chunks[chunkKey].geometry.dispose();
+      delete chunks[chunkKey];
+      generatedChunks.delete(chunkKey);
+    }
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  updatePosition();
+  renderer.render(scene, camera);
+}
+
+init();
+animate();
+</script></body></html>
