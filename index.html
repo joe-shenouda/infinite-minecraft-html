@@ -1,4 +1,4 @@
-<html><head><base href="https://websim.ai/" /><title>Infinite Minecraft-like World - WebSim</title>
+<html><head><title>Infinite Minecraft-like World</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/simplex-noise/2.4.0/simplex-noise.min.js"></script>
@@ -322,7 +322,7 @@ function updateChunk(chunkX, chunkZ) {
   generateChunk(chunkX, chunkZ);
 }
 
-const moveSpeed = 0.2; // Increased move speed
+const moveSpeed = 0.9; // Increased move speed
 const moveState = { forward: false, backward: false, left: false, right: false, up: false, down: false };
 
 function onKeyDown(event) {
