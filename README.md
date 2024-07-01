@@ -13,6 +13,9 @@ This project demonstrates an infinite, procedurally generated, Minecraft-like wo
 - [Contributing](#contributing)
 - [License](#license)
 
+<img src="https://i.postimg.cc/HTZRYYHB/Schermafbeelding-2024-07-01-111824.png" alt="Banner" style="width:100%;">
+
+
 ## Demo
 
 Check out the live demo [here](https://joe-shenouda.github.io/infinite-minecraft-html/).
